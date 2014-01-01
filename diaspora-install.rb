@@ -348,7 +348,7 @@ module Check
         Log.info "checking for #{k}..."
 
         Bash.which v
-        Log.fatal "you are missing the #{v} command, please install #{k}" unless Bash.status.exitstatus == 0
+        Log.fatal "you are missing the '#{v}' command, please install #{k}" unless Bash.status.exitstatus == 0
         Log.finish MESSAGES[:found]
       end
     end
