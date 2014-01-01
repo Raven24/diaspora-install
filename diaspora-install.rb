@@ -77,12 +77,6 @@ install, update, manage and work with multiple ruby environments.
 For more details check out https://rvm.io//},
   rvmrc_trusted: %Q{'.rvmrc' will be trusted from now on},
   ruby_version_check: %Q{checking Ruby version...},
-  ruby_version_mismatch: \
-%Q{Unable to change ruby version to #{DIASPORA[:ruby_version]} using RVM.
-Please install it with:
-
-    \`rvm install #{DIASPORA[:ruby_version]}\`
-},
   ruby_version_fatal: \
 %Q{Make sure to install the right ruby version, before continuing with this script!},
   rubygems_version_check: %Q{checking rubygems version...},
@@ -316,7 +310,7 @@ module Bash
 
     def prefix(mode)
       # create an 'interactive' bash, to load bashrc files
-      prfx = "bash -i -c '" if mode.include?(:interactive) || mode.include?(:rvm)
+      prfx = "bash -i -l -c '" if mode.include?(:interactive) || mode.include?(:rvm)
       if mode.include?(:rvm)
         rvm_path = (STATE[:rvm_source_local] ? DIASPORA[:rvm_local_path] : DIASPORA[:rvm_system_path])
         prfx = "#{prfx} . #{rvm_path} && "
@@ -389,7 +383,12 @@ module Check
       end
 
       Log.error MESSAGES[:not_ok]
-      Log.out MESSAGES[:ruby_version_mismatch]
+      Log.out \
+%Q{Unable to change ruby version to #{DIASPORA[:ruby_version]} using RVM.
+Please install it with:
+
+    \`rvm install #{DIASPORA[:ruby_version]}\`
+}
       Log.fatal MESSAGES[:ruby_version_fatal]
     end
 
