@@ -8,6 +8,7 @@
 # there mustn't be any gem dependencies. only ruby stdlib should be require-d
 require 'fileutils'
 require 'open3'
+require 'open-uri'
 
 $stdout.sync = true
 
@@ -17,8 +18,14 @@ DIASPORA = {
   wiki_url: 'https://wiki.diasporafoundation.org/',
   irc_url:  'irc://freenode.net/diaspora',
 
+  ruby_env_url: 'https://raw.github.com/diaspora/diaspora/develop/script/env/ruby_env',
+
   git_branch: 'develop',
-  ruby_version: '2.0.0-p353',
+
+  # populated by ruby_env
+  #ruby_version: '2.0.0-p353',
+  #rubygems_version: '2.1.11',
+  #gemset: 'diaspora',
 
   rvm_local_path: "#{ENV['HOME']}/.rvm/scripts/rvm",
   rvm_system_path: '/usr/local/rvm/scripts/rvm'
@@ -30,7 +37,8 @@ BINARIES = {
   git: 'git',
   ruby: 'ruby',  # duh!
   rubygems: 'gem',
-  redis: 'redis-server'
+  redis: 'redis-server',
+  gcc: 'gcc'
 }
 
 # ==  global state  ============================================================
@@ -47,8 +55,18 @@ MESSAGES = {
   not_interactive: \
 %Q{This script must be run interactively, it requires user input!},
   no_root: %Q{Don't run this script as root!},
+  not_found: %Q{NOT FOUND},
+  not_ok: %Q{NOT OK},
+  found: %Q{FOUND},
+  ok: %Q{OK},
   look_wiki: %Q{have a look at our wiki: #{DIASPORA[:wiki_url]}},
   join_irc: %Q{or join us on IRC: #{DIASPORA[:irc_url]}},
+  done_enter_continue: \
+%Q{When you're done, come back here and press [Enter] to continue...},
+  type_enter_continue: %Q{type something and/or just press [Enter] to continue...},
+  enter_create_continue: %Q{Press [Enter] to create it and continue...},
+  enter_continue: %Q{Press [Enter] to continue...},
+  rvm_check: %Q{checking for rvm...},
   rvm_continue: \
 %Q{Press [Enter] to continue without RVM or abort this script and install it...},
   rvm_not_found: \
@@ -57,6 +75,8 @@ It is higly recommended to use it, since it allows you to easily
 install, update, manage and work with multiple ruby environments.
 
 For more details check out https://rvm.io//},
+  rvmrc_trusted: %Q{'.rvmrc' will be trusted from now on},
+  ruby_version_check: %Q{checking Ruby version...},
   ruby_version_mismatch: \
 %Q{Unable to change ruby version to #{DIASPORA[:ruby_version]} using RVM.
 Please install it with:
@@ -65,6 +85,12 @@ Please install it with:
 },
   ruby_version_fatal: \
 %Q{Make sure to install the right ruby version, before continuing with this script!},
+  rubygems_version_check: %Q{checking rubygems version...},
+  rubygems_try_install: %Q{trying to install the required rubygems version...},
+  rubygems_fail: \
+%Q{The required rubygems version was not found and could not be installed!
+You may try it with your existing version, but it might not work...},
+  jsrt_check: %Q{checking for a JavaScript runtime...},
   jsrt_not_found: \
 %Q{This script was unable to find a JavaScript runtime compatible to ExecJS on
 your system. We recommend you install either Node.js or TheRubyRacer, since
@@ -76,13 +102,17 @@ those have been proven to work.
 For more information on ExecJS, visit
 -- https://github.com/sstephenson/execjs},
   jsrt_fatal: %Q{Can't continue without a JS runtime!},
-  bundler_try_install: %Q{trying to install bundler...},
+  bundler_check: %Q{checking for 'bundler' gem...},
+  bundler_try_install: %Q{trying to install 'bundler' gem...},
   bundler_fatal: %Q{'bundler' gem was not found and could not be installed!},
   git_clone: \
 %Q{Where would you like to put the git clone, or,
 where is your existing git clone?},
   git_nonexistent_folder: \
 %Q{The folder you specified does not exist.},
+  git_no_repo: %Q{The specified folder doesn't contain a git repo},
+  git_cloning: %Q{cloning the git repo...},
+  db_cfg_created: %Q{created DB config file 'config/database.yml},
   db_chk: \
 %Q{You can now open the database config file in 'config/database.yml'
 with your favorite editor and change the values to your needs.},
@@ -94,10 +124,15 @@ This script will try to populate the database in a later step.},
 %Q{It's time to populate the database with the table schema.
 Type [N/n]+[Enter] to skip over any DB operations, or
 simply press [Enter] to proceed with populating the DB.},
+  db_skipped: %Q{loading the DB schema skipped by user},
+  db_creating: \
+%Q{creating the DB as specified in 'config/database.yml', please wait...},
+  config_created: %Q{created diaspora* config file 'config/diaspora.yml'},
   config_msg: \
 %Q{You're encouraged to look at the config file, that was just created,
 in 'config/diaspora.yml', later. For development you won't have to change
 anything for now. Still, it might be interesting ;)},
+  installing_gems: %Q{installing all required gems...},
   welcome: \
 %Q{#####################################################################
 
@@ -136,7 +171,7 @@ or join us on IRC #{DIASPORA[:irc_url]}}
 
 
 # ==  logging helper  ==========================================================
-class Log
+module Log
   COLORS = { black: 0, red: 1, green: 2, yellow: 3, blue: 4, magenta: 5, cyan: 6, white: 7 }
   COLOR_MAP = { debug: :white, info: :cyan, warn: :yellow, error: :red, fatal: :red, unknown: :blue }
   DULL   = 0
@@ -193,9 +228,10 @@ class Log
       fmt_msg("#{@last_msg} #{msg}", @last_lvl)
     end
 
-    def enter_to_continue
+    def enter_to_continue(msg_id=:enter_continue)
       Check.interactive?  # just to be sure...
 
+      Log.info MESSAGES[msg_id]
       print ONE_UP
       $stdin.gets.strip
     end
@@ -313,12 +349,12 @@ module Check
 
         Bash.which v
         Log.fatal "you are missing the #{v} command, please install #{k}" unless Bash.status.exitstatus == 0
-        Log.finish "found"
+        Log.finish MESSAGES[:found]
       end
     end
 
     def rvm?
-      Log.info "checking for rvm..."
+      Log.info MESSAGES[:rvm_check]
 
       # does rvm load inside bash
       if (Bash.builtin('type -t rvm') == "function")
@@ -332,34 +368,56 @@ module Check
       end
 
       if STATE[:rvm_found]
-        Log.finish "found"
+        Log.finish MESSAGES[:found]
         return
       end
 
-      Log.warn "not found"
+      Log.warn MESSAGES[:not_found]
       Log.out MESSAGES[:rvm_not_found]
-      Log.info MESSAGES[:rvm_continue]
-      Log.enter_to_continue
+      Log.enter_to_continue :rvm_continue
     end
 
     def ruby_version?
       return unless STATE[:rvm_found]
 
-      Log.info "checking ruby version..."
+      Log.info MESSAGES[:ruby_version_check]
 
       Bash.function "rvm use #{DIASPORA[:ruby_version]}"
       if Bash.status.exitstatus == 0
-        Log.finish "ok"
+        Log.finish MESSAGES[:ok]
         return
       end
 
-      Log.error "not ok"
+      Log.error MESSAGES[:not_ok]
       Log.out MESSAGES[:ruby_version_mismatch]
       Log.fatal MESSAGES[:ruby_version_fatal]
     end
 
+    def rubygems_version?
+      Log.info MESSAGES[:rubygems_version_check]
+
+      version = Bash.run("gem --version", :interactive)
+      if version == DIASPORA[:rubygems_version]
+        Log.finish MESSAGES[:ok]
+        return
+      end
+
+      Log.warn MESSAGES[:not_ok]
+      return unless STATE[:rvm_found]
+
+      Log.info MESSAGES[:rubygems_try_install]
+      Bash.run("rvm rubygems #{DIASPORA[:rubygems_version]}", :rvm)
+      if Bash.status.exitstatus == 0
+        Log.finish MESSAGES[:ok]
+        return
+      end
+
+      Log.error MESSAGES[:rubygems_fail]
+      Log.enter_to_continue
+    end
+
     def js_runtime?
-      Log.info "checking for a JavaScript runtime..."
+      Log.info MESSAGES[:jsrt_check]
 
       if (Bash.which("node") && Bash.status.exitstatus == 0)
         STATE[:js_runtime_found] = true
@@ -368,29 +426,29 @@ module Check
       end
 
       if STATE[:js_runtime_found]
-        Log.finish "found"
+        Log.finish MESSAGES[:found]
         return
       end
 
-      Log.error "not found"
+      Log.error MESSAGES[:not_found]
       Log.out MESSAGES[:jsrt_not_found]
       Log.fatal MESSAGES[:jsrt_fatal]
     end
 
     def bundler?
-      Log.info "checking for 'bundler' gem..."
+      Log.info MESSAGES[:bundler_check]
 
       Bash.run("gem which bundler", :interactive, :silent)
       if Bash.status.exitstatus == 0
-        Log.finish "found"
+        Log.finish MESSAGES[:found]
         return
       end
 
-      Log.warn "not ok"
+      Log.warn MESSAGES[:not_found]
       Log.info MESSAGES[:bundler_try_install]
       Bash.run("gem install bundler", :interactive)
       if Bash.status.exitstatus == 0
-        Log.info "ok"
+        Log.finish MESSAGES[:ok]
         return
       end
 
@@ -401,14 +459,26 @@ module Check
       Check.binaries?
       Check.rvm?
       Check.ruby_version?
+      Check.rubygems_version?
       Check.js_runtime?
       Check.bundler?
     end
   end
 end
 
-class Install
+module Install
   class << self
+    def prepare
+      # fetch variables from repo
+      open(DIASPORA[:ruby_env_url]) do |f|
+        f.each_line do |line|
+          line.match(/([^=]+)="?([^"]+)"?/) do |m|
+            DIASPORA[m[1].to_sym] = m[2]
+          end
+        end
+      end
+    end
+
     def git_repo
       Log.text MESSAGES[:git_clone]
       git_path = File.expand_path(gets).strip
@@ -429,42 +499,38 @@ class Install
 
     def db_setup
       FileUtils.cp "config/database.yml.example", "config/database.yml"
-      Log.info "created DB config file 'config/database.yml"
+      Log.info MESSAGES[:db_cfg_created]
 
       Log.text MESSAGES[:db_chk]
-      Log.info "When you're done, come back here and press [Enter] to continue..."
-      Log.enter_to_continue
+      Log.enter_to_continue :done_enter_continue
 
       Log.text MESSAGES[:db_msg]
-      Log.info "Press [Enter] to continue..."
       Log.enter_to_continue
     end
 
     def config_setup
       FileUtils.cp "config/diaspora.yml.example", "config/diaspora.yml"
-      Log.info "created diaspora* config file 'config/diaspora.yml'"
+      Log.info MESSAGES[:config_created]
 
       Log.text MESSAGES[:config_msg]
-      Log.info "Press [Enter] to continue..."
       Log.enter_to_continue
     end
 
     def gem_bundle
-      Log.info "installing all required gems..."
+      Log.info MESSAGES[:installing_gems]
       Bash.run_or_error("bundle install", :rvm)
     end
 
     def db_populate
       Log.text MESSAGES[:db_create]
-      Log.info "type something and/or just press [Enter] to continue..."
-      input = Log.enter_to_continue
+      input = Log.enter_to_continue :type_enter_continue
 
       unless input.empty?
-        Log.info "loading the DB schema skipped by user"
+        Log.info MESSAGES[:db_skipped]
         return
       end
 
-      Log.info "creating the DB as specified in 'config/database.yml', please wait..."
+      Log.info MESSAGES[:db_creating]
       Bash.run_or_error("bundle exec rake db:schema:load_if_ruby --trace", :rvm)
     end
 
@@ -475,14 +541,13 @@ class Install
       return unless STATE[:rvm_found] && File.exists?(rvmrc)
 
       Bash.function "rvm rvmrc warning ignore #{File.expand_path(rvmrc)}"
-      Log.info "'.rvmrc' will be trusted from now on"
+      Log.info MESSAGES[:rvmrc_trusted]
     end
 
     def git_create_path(git_path)
       Log.info MESSAGES[:git_nonexistent_folder]
       Log.text "create '#{git_path}'?"
-      Log.info "Press [Enter] to create it and continue..."
-      Log.enter_to_continue
+      Log.enter_to_continue :enter_create_continue
 
       Log.info "creating '#{git_path}' and cloning the git repo..."
       FileUtils.mkdir_p git_path
@@ -491,11 +556,10 @@ class Install
     end
 
     def git_clone_path(git_path)
-      Log.text "The specified folder doesn't contain a git repo"
-      Log.info "Press [Enter] to create it and continue..."
-      Log.enter_to_continue
+      Log.text MESSAGES[:git_no_repo]
+      Log.enter_to_continue :enter_create_continue
 
-      Log.info "cloning the git repo..."
+      Log.info MESSAGES[:git_cloning]
       git_create_clone(git_path)
     end
 
@@ -517,15 +581,16 @@ class Install
   end
 end
 
+
 # run this if the script is invoked directly
 if __FILE__==$0
   Log.fatal MESSAGES[:no_root] if Check.root?
   Check.interactive?
 
   Log.text MESSAGES[:welcome]
-  Log.info "Press [Enter] to continue..."
   Log.enter_to_continue
 
+  Install.prepare
   Check.all
 
   # we're still going, start installation
