@@ -444,7 +444,8 @@ Please install it with:
     def js_runtime?
       Log.info MESSAGES[:jsrt_check]
 
-      if (Bash.which("node") && Bash.status.exitstatus == 0)
+      if (Bash.which("node") && Bash.status.exitstatus == 0) ||
+         (Bash.which("nodejs") && Bash.status.exitstatus == 0)  # debian 'wheezy-backports'
         STATE[:js_runtime_found] = true
       elsif (Bash.run('ruby -e "require \"v8\""', :silent) && Bash.status.exitstatus == 0)
         STATE[:js_runtime_found] = true
