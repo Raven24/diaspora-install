@@ -79,6 +79,8 @@ For more details check out https://rvm.io//},
   ruby_version_check: %Q{checking Ruby version...},
   ruby_version_fatal: \
 %Q{Make sure to install the right ruby version, before continuing with this script!},
+  gemset_check: %Q{checking for RVM gemset...},
+  gemset_fail: %Q{unable to find or create the RVM gemset...},
   rubygems_version_check: %Q{checking rubygems version...},
   rubygems_try_install: %Q{trying to install the required rubygems version...},
   rubygems_fail: \
@@ -312,8 +314,11 @@ module Bash
       # create an 'interactive' bash, to load bashrc files
       prfx = "bash -i -l -c '" if mode.include?(:interactive) || mode.include?(:rvm)
       if mode.include?(:rvm)
-        rvm_path = (STATE[:rvm_source_local] ? DIASPORA[:rvm_local_path] : DIASPORA[:rvm_system_path])
-        prfx = "#{prfx} . #{rvm_path} && "
+        rvm_cmd = "rvm use #{DIASPORA[:ruby_version]}@#{DIASPORA[:gemset]}" if STATE[:rvm_found]
+        rvm_cmd = ". #{DIASPORA[:rvm_local_path]} && #{rvm_cmd}" if STATE[:rvm_source_local]
+        rvm_cmd = ". #{DIASPORA[:rvm_system_path]} $$ #{rvm_cmd}" if STATE[:rvm_source_system]
+
+        prfx = "#{prfx} #{rvm_cmd} && "
       end
       prfx
     end
@@ -353,12 +358,10 @@ module Check
       # does rvm load inside bash
       if (Bash.builtin('type -t rvm') == "function")
         STATE[:rvm_found] = true
-      end
-
-      if (ENV.key?('HOME') && File.exists?(DIASPORA[:rvm_local_path]))
-        STATE[:rvm_source_local] = true
+      elsif (ENV.key?('HOME') && File.exists?(DIASPORA[:rvm_local_path]))
+        STATE[:rvm_source_local] = STATE[:rvm_found] = true
       elsif File.exists?(DIASPORA[:rvm_system_path])
-        STATE[:rvm_source_system] = true
+        STATE[:rvm_source_system] = STATE[:rvm_found] = true
       end
 
       if STATE[:rvm_found]
@@ -392,10 +395,33 @@ Please install it with:
       Log.fatal MESSAGES[:ruby_version_fatal]
     end
 
+    def gemset?
+      return unless STATE[:rvm_found]
+
+      Log.info MESSAGES[:gemset_check]
+
+      Bash.function "rvm use #{DIASPORA[:ruby_version]}@#{DIASPORA[:gemset]}"
+      if Bash.status.exitstatus == 0
+        Log.finish MESSAGES[:OK]
+        return
+      end
+
+      Log.warn MESSAGES[:not_ok]
+      Log.info "gemset #{DIASPORA[:gemset]} doesn't exist, creating it..."
+      Bash.function "rvm #{DIASPORA[:ruby_version]} do rvm gemset create #{DIASPORA[:gemset]}"
+      if Bash.status.exitstatus == 0
+        Log.finish MESSAGES[:OK]
+        return
+      end
+
+      Log.warn MESSAGES[:gemset_fail]
+      Log.enter_to_continue
+    end
+
     def rubygems_version?
       Log.info MESSAGES[:rubygems_version_check]
 
-      version = Bash.run("gem --version", :interactive)
+      version = Bash.run("gem --version", :rvm).split("\n").last
       if version == DIASPORA[:rubygems_version]
         Log.finish MESSAGES[:ok]
         return
@@ -437,7 +463,7 @@ Please install it with:
     def bundler?
       Log.info MESSAGES[:bundler_check]
 
-      Bash.run("gem which bundler", :interactive, :silent)
+      Bash.run("gem which bundler", :rvm)
       if Bash.status.exitstatus == 0
         Log.finish MESSAGES[:found]
         return
@@ -458,6 +484,7 @@ Please install it with:
       Check.binaries?
       Check.rvm?
       Check.ruby_version?
+      Check.gemset?
       Check.rubygems_version?
       Check.js_runtime?
       Check.bundler?
