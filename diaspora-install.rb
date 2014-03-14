@@ -47,6 +47,7 @@ STATE = {
   rvm_source_local: false,
   rvm_source_system: false,
   js_runtime_found: false,
+  log_level: 2,
   git_clone_path: '/srv/diaspora'
 }
 
@@ -61,6 +62,8 @@ MESSAGES = {
   ok: %Q{OK},
   look_wiki: %Q{have a look at our wiki: #{DIASPORA[:wiki_url]}},
   join_irc: %Q{or join us on IRC: #{DIASPORA[:irc_url]}},
+  debugging: \
+%Q{(you can also try to run this script with '-d' or '-v' switches for more information)},
   done_enter_continue: \
 %Q{When you're done, come back here and press [Enter] to continue...},
   type_enter_continue: %Q{type something and/or just press [Enter] to continue...},
@@ -168,8 +171,13 @@ or join us on IRC #{DIASPORA[:irc_url]}}
 
 # ==  logging helper  ==========================================================
 module Log
-  COLORS = { black: 0, red: 1, green: 2, yellow: 3, blue: 4, magenta: 5, cyan: 6, white: 7 }
-  COLOR_MAP = { debug: :white, info: :cyan, warn: :yellow, error: :red, fatal: :red, unknown: :blue }
+  # +30 is added to foreground colors and +40 for background colors for use
+  # in the shell escape sequences
+  COLORS = { black: 0, red: 1, green: 2, yellow: 3, blue: 4, magenta: 5, cyan: 6, light_gray: 7,
+             dark_gray: 60, light_red: 61, light_green: 62, light_yellow: 63, light_blue: 64,
+             light_magenta: 65, light_cyan: 66, white: 67 }
+  COLOR_MAP = { verbose: :dark_gray, debug: :white, info: :cyan, warn: :yellow, 
+                error: :red, fatal: :red, unknown: :blue }
   DULL   = 0
   BRIGHT = 1
   ESC    = "\033"
@@ -178,13 +186,26 @@ module Log
   ERASE  = "#{ESC}[K"
 
   class << self
-    [:debug, :info, :warn, :error, :unknown].each do |level|
+    [:info, :warn, :error, :unknown].each do |level|
       define_method level do |msg|
         fmt_msg(msg, level)
       end
     end
 
+    [:verbose, :debug].each do |level|
+      define_method level do |msg|
+        if send("#{level.to_s}?")
+          fmt_msg(msg, level)
+        else
+          append(".")
+        end
+      end
+    end
+
     def text(msg="", nested=false)
+      @last_msg = ""
+      @last_lvl = nil
+
       msg = "\n#{msg}\n \n" unless nested
 
       if msg.include?("\n")
@@ -200,6 +221,7 @@ module Log
       puts "#{blocks}  #{message}"
     end
 
+    # just output some text without a log level
     def out(msg="")
       if msg.include?("\n")
         msg.split("\n").each do |line|
@@ -215,13 +237,14 @@ module Log
       fmt_msg(msg, :fatal)
       fmt_msg(MESSAGES[:look_wiki])
       fmt_msg(MESSAGES[:join_irc])
+      fmt_msg(MESSAGES[:debugging]) if STATE[:log_level] > 1
       exit 1
     end
 
     # append to a prevous message
-    def finish(msg="")
+    def append(msg="")
       print "\r#{ONE_UP}#{ERASE}"
-      fmt_msg("#{@last_msg} #{msg}", @last_lvl)
+      fmt_msg("#{@last_msg} #{msg.to_s.strip}", @last_lvl)
     end
 
     def enter_to_continue(msg_id=:enter_continue)
@@ -230,6 +253,14 @@ module Log
       Log.info MESSAGES[msg_id]
       print ONE_UP
       $stdin.gets.strip
+    end
+
+    def verbose?
+      (STATE[:log_level] < 1)
+    end
+
+    def debug?
+      (STATE[:log_level] < 2)
     end
 
     private
@@ -245,7 +276,7 @@ module Log
     end
 
     def fmt_msg(msg="", level=nil)
-      @last_msg = msg
+      @last_msg = msg.to_s.strip
       @last_lvl = level
 
       color = (level ? COLOR_MAP[level] : :white)
@@ -256,7 +287,7 @@ module Log
 
       msg = colorize(msg, :white, :black, true) unless level
 
-      puts "#{blocks} #{lvl} -- #{msg}"
+      puts "#{blocks} #{lvl} -- #{msg.to_s.strip}"
     end
   end
 end
@@ -282,7 +313,7 @@ module Bash
 
     def run(cmd, *mode)
       command = "#{prefix(mode)}#{cmd}#{suffix(mode)}"
-      Log.debug "running: #{command}"
+      Log.verbose "running: #{command}"
       out = ''
 
       #`#{command}`.strip
@@ -301,7 +332,7 @@ module Bash
         stderr.close
 
         @status = wait_thr.value
-        Log.debug @status
+        Log.verbose @status
       end
 
       return '' if mode.include?(:silent)
@@ -348,7 +379,7 @@ module Check
 
         Bash.which v
         Log.fatal "you are missing the '#{v}' command, please install #{k}" unless Bash.status.exitstatus == 0
-        Log.finish MESSAGES[:found]
+        Log.append MESSAGES[:found]
       end
     end
 
@@ -365,7 +396,7 @@ module Check
       end
 
       if STATE[:rvm_found]
-        Log.finish MESSAGES[:found]
+        Log.append MESSAGES[:found]
         return
       end
 
@@ -381,7 +412,7 @@ module Check
 
       Bash.function "rvm use #{DIASPORA[:ruby_version]}"
       if Bash.status.exitstatus == 0
-        Log.finish MESSAGES[:ok]
+        Log.append MESSAGES[:ok]
         return
       end
 
@@ -402,7 +433,7 @@ Please install it with:
 
       Bash.function "rvm use #{DIASPORA[:ruby_version]}@#{DIASPORA[:gemset]}"
       if Bash.status.exitstatus == 0
-        Log.finish MESSAGES[:OK]
+        Log.append MESSAGES[:ok]
         return
       end
 
@@ -410,7 +441,7 @@ Please install it with:
       Log.info "gemset #{DIASPORA[:gemset]} doesn't exist, creating it..."
       Bash.function "rvm #{DIASPORA[:ruby_version]} do rvm gemset create #{DIASPORA[:gemset]}"
       if Bash.status.exitstatus == 0
-        Log.finish MESSAGES[:OK]
+        Log.append MESSAGES[:ok]
         return
       end
 
@@ -423,7 +454,7 @@ Please install it with:
 
       version = Bash.run("gem --version", :rvm).split("\n").last
       if version == DIASPORA[:rubygems_version]
-        Log.finish MESSAGES[:ok]
+        Log.append MESSAGES[:ok]
         return
       end
 
@@ -433,7 +464,7 @@ Please install it with:
       Log.info MESSAGES[:rubygems_try_install]
       Bash.run("rvm rubygems #{DIASPORA[:rubygems_version]}", :rvm)
       if Bash.status.exitstatus == 0
-        Log.finish MESSAGES[:ok]
+        Log.append MESSAGES[:ok]
         return
       end
 
@@ -452,7 +483,7 @@ Please install it with:
       end
 
       if STATE[:js_runtime_found]
-        Log.finish MESSAGES[:found]
+        Log.append MESSAGES[:found]
         return
       end
 
@@ -466,7 +497,7 @@ Please install it with:
 
       Bash.run("gem which bundler", :rvm)
       if Bash.status.exitstatus == 0
-        Log.finish MESSAGES[:found]
+        Log.append MESSAGES[:found]
         return
       end
 
@@ -474,7 +505,7 @@ Please install it with:
       Log.info MESSAGES[:bundler_try_install]
       Bash.run("gem install bundler", :interactive)
       if Bash.status.exitstatus == 0
-        Log.finish MESSAGES[:ok]
+        Log.append MESSAGES[:ok]
         return
       end
 
@@ -511,7 +542,7 @@ module Install
       git_path = File.expand_path(gets).strip
       STATE[:git_clone_path] = git_path
 
-      Log.debug(git_path)
+      Log.debug(git_path) if Log.debug?
 
       if !Dir.exists?(git_path)
         git_create_path(git_path)
@@ -611,8 +642,33 @@ end
 
 # run this if the script is invoked directly
 if __FILE__==$0
+  STDOUT.sync = true
+  require 'optparse'
+
   Log.fatal MESSAGES[:no_root] if Check.root?
   Check.interactive?
+
+  optparse = OptionParser.new do |opts|
+    opts.banner = "Usage: #{File.basename($0, '.*')} [options]"
+
+    opts.on('-d', '--debug', 
+            'produce some extended debugging output') do
+      STATE[:log_level] = 1
+    end
+
+    opts.on('-v', '--verbose',
+            'produce a huge amount of mostly unnecessary output') do
+      STATE[:log_level] = 0
+    end
+
+    opts.on('-h', '--help',
+            'display this help') do
+      puts opts
+      exit
+    end
+  end
+
+  optparse.parse!
 
   Log.text MESSAGES[:welcome]
   Log.enter_to_continue
