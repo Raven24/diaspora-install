@@ -176,14 +176,16 @@ module Log
   COLORS = { black: 0, red: 1, green: 2, yellow: 3, blue: 4, magenta: 5, cyan: 6, light_gray: 7,
              dark_gray: 60, light_red: 61, light_green: 62, light_yellow: 63, light_blue: 64,
              light_magenta: 65, light_cyan: 66, white: 67 }
-  COLOR_MAP = { verbose: :dark_gray, debug: :white, info: :cyan, warn: :yellow, 
-                error: :red, fatal: :red, unknown: :blue }
+  COLOR_MAP = { verbose: :dark_gray, debug: :white, info: :cyan, warn: :yellow,
+                error: :red, fatal: :red, unknown: :blue, cont: :white }
   DULL   = 0
   BRIGHT = 1
   ESC    = "\033"
   RESET  = "#{ESC}[0m"
   ONE_UP = "#{ESC}[1A"
   ERASE  = "#{ESC}[K"
+
+  MAX_WIDTH = 70
 
   class << self
     [:info, :warn, :error, :unknown].each do |level|
@@ -197,11 +199,13 @@ module Log
         if send("#{level.to_s}?")
           fmt_msg(msg, level)
         else
+          reset_log_for_quiet_levels
           append(".")
         end
       end
     end
 
+    # just output some text without a log level
     def text(msg="", nested=false)
       @last_msg = ""
       @last_lvl = nil
@@ -218,19 +222,7 @@ module Log
       message = colorize(msg, :white, :black, true)
       blocks  = colorize("  ", :black, :white)
 
-      puts "#{blocks}  #{message}"
-    end
-
-    # just output some text without a log level
-    def out(msg="")
-      if msg.include?("\n")
-        msg.split("\n").each do |line|
-          fmt_msg(line)
-        end
-        return
-      end
-
-      fmt_msg(msg)
+      puts "#{blocks}   #{message}"
     end
 
     def fatal(msg="")
@@ -275,6 +267,10 @@ module Log
       "#{RESET}#{txt_col}#{msg}#{RESET}"
     end
 
+    def reset_log_for_quiet_levels
+      fmt_msg("", :info) if @last_lvl != :info
+    end
+
     def fmt_msg(msg="", level=nil)
       @last_msg = msg.to_s.strip
       @last_lvl = level
@@ -283,11 +279,23 @@ module Log
       blocks = colorize("  ", :black, color)
 
       lvl = "         "
-      lvl = colorize("[#{level.to_s.center(7)}]", COLOR_MAP[level], :black, true) if level
+      lvl = colorize("[#{level.to_s.center(7)}]", COLOR_MAP[level], :black, true) if level && level!=:cont
+
+      prefix = "#{blocks} "
+      prefix += "#{lvl} --" if level
 
       msg = colorize(msg, :white, :black, true) unless level
 
-      puts "#{blocks} #{lvl} -- #{msg.to_s.strip}"
+      max_w = level ? MAX_WIDTH : MAX_WIDTH+12
+
+      if @last_msg.size <= max_w
+        puts "#{prefix} #{msg.to_s.strip}"
+      else
+        msg_arr = @last_msg.gsub(/\n/m, "").scan(/.{1,#{max_w}}/).flatten
+        fmt_msg(msg_arr.shift, @last_lvl)
+        lvl = @last_lvl ? :cont : nil
+        msg_arr.each { |msg| fmt_msg(msg, lvl) }
+      end
     end
   end
 end
@@ -401,7 +409,7 @@ module Check
       end
 
       Log.warn MESSAGES[:not_found]
-      Log.out MESSAGES[:rvm_not_found]
+      Log.text MESSAGES[:rvm_not_found]
       Log.enter_to_continue :rvm_continue
     end
 
@@ -417,7 +425,7 @@ module Check
       end
 
       Log.error MESSAGES[:not_ok]
-      Log.out \
+      Log.text \
 %Q{Unable to change ruby version to #{DIASPORA[:ruby_version]} using RVM.
 Please install it with:
 
@@ -488,7 +496,7 @@ Please install it with:
       end
 
       Log.error MESSAGES[:not_found]
-      Log.out MESSAGES[:jsrt_not_found]
+      Log.text MESSAGES[:jsrt_not_found]
       Log.fatal MESSAGES[:jsrt_fatal]
     end
 
@@ -651,7 +659,7 @@ if __FILE__==$0
   optparse = OptionParser.new do |opts|
     opts.banner = "Usage: #{File.basename($0, '.*')} [options]"
 
-    opts.on('-d', '--debug', 
+    opts.on('-d', '--debug',
             'produce some extended debugging output') do
       STATE[:log_level] = 1
     end
