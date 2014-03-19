@@ -60,8 +60,9 @@ MESSAGES = {
   not_ok: %Q{NOT OK},
   found: %Q{FOUND},
   ok: %Q{OK},
-  look_wiki: %Q{have a look at our wiki: #{DIASPORA[:wiki_url]}},
-  join_irc: %Q{or join us on IRC: #{DIASPORA[:irc_url]}},
+  info_help: \
+%Q{have a look at our wiki: #{DIASPORA[:wiki_url]}
+or join us on IRC: #{DIASPORA[:irc_url]}},
   debugging: \
 %Q{(you can also try to run this script with '-d' or '-v' switches for more information)},
   done_enter_continue: \
@@ -227,9 +228,11 @@ module Log
 
     def fatal(msg="")
       fmt_msg(msg, :fatal)
-      fmt_msg(MESSAGES[:look_wiki])
-      fmt_msg(MESSAGES[:join_irc])
-      fmt_msg(MESSAGES[:debugging]) if STATE[:log_level] > 1
+
+      help = MESSAGES[:info_help]
+      help += "\n\n#{MESSAGES[:debugging]}" if STATE[:log_level] > 1
+
+      text(help)
       exit 1
     end
 
@@ -239,11 +242,21 @@ module Log
       fmt_msg("#{@last_msg} #{msg.to_s.strip}", @last_lvl)
     end
 
-    def enter_to_continue(msg_id=:enter_continue)
+    def prompt(msg_id)
+      enter_to_continue(msg_id, true)
+    end
+
+    def enter_to_continue(msg_id=:enter_continue, prompt=false)
       Check.interactive?  # just to be sure...
 
-      Log.info MESSAGES[msg_id]
-      print ONE_UP
+      Log.info MESSAGES[msg_id] unless msg_id==""
+
+      if prompt
+        print colorize("  ", :black, :dark_gray) + " > "
+      else
+        print ONE_UP
+      end
+
       $stdin.gets.strip
     end
 
@@ -268,7 +281,7 @@ module Log
     end
 
     def reset_log_for_quiet_levels
-      fmt_msg("", :info) if @last_lvl != :info
+      fmt_msg("", :info) unless [:info, :cont].include?(@last_lvl)
     end
 
     def fmt_msg(msg="", level=nil)
@@ -547,7 +560,8 @@ module Install
 
     def git_repo
       Log.text MESSAGES[:git_clone]
-      git_path = File.expand_path(gets).strip
+      path = Log.prompt("")
+      git_path = File.expand_path(path)
       STATE[:git_clone_path] = git_path
 
       Log.debug(git_path) if Log.debug?
@@ -589,7 +603,7 @@ module Install
 
     def db_populate
       Log.text MESSAGES[:db_create]
-      input = Log.enter_to_continue :type_enter_continue
+      input = Log.prompt :type_enter_continue
 
       unless input.empty?
         Log.info MESSAGES[:db_skipped]
