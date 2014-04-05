@@ -18,11 +18,12 @@ DIASPORA = {
   wiki_url: 'https://wiki.diasporafoundation.org/',
   irc_url:  'irc://freenode.net/diaspora',
 
-  ruby_env_url: 'https://raw.github.com/diaspora/diaspora/develop/script/env/ruby_env',
+  ruby_version_url: 'https://raw.githubusercontent.com/diaspora/diaspora/develop/.ruby-version',
+  ruby_gemset_url: 'https://raw.githubusercontent.com/diaspora/diaspora/develop/.ruby-gemset',
 
   git_branch: 'develop',
 
-  # populated by ruby_env
+  # populated by .ruby-version and .ruby-gemset
   #ruby_version: '2.0.0-p353',
   #rubygems_version: '2.1.11',
   #gemset: 'diaspora',
@@ -538,7 +539,7 @@ Please install it with:
       Check.rvm?
       Check.ruby_version?
       Check.gemset?
-      Check.rubygems_version?
+      #Check.rubygems_version?
       Check.js_runtime?
       Check.bundler?
     end
@@ -549,12 +550,12 @@ module Install
   class << self
     def prepare
       # fetch variables from repo
-      open(DIASPORA[:ruby_env_url]) do |f|
-        f.each_line do |line|
-          line.match(/([^=]+)="?([^"]+)"?/) do |m|
-            DIASPORA[m[1].to_sym] = m[2]
-          end
-        end
+      open(DIASPORA[:ruby_version_url]) do |f|
+        DIASPORA[:ruby_version] = f.gets.strip
+      end
+
+      open(DIASPORA[:ruby_gemset_url]) do |f|
+        DIASPORA[:gemset] = f.gets.strip
       end
     end
 
